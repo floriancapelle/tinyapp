@@ -1,142 +1,144 @@
-var $ = require('jquery-browserify'),
-  EventEmitter2 = require('eventemitter2').EventEmitter2,
-  underscore = require('underscore'),
-  bb = require('backbone-browserify'),
-  cuid = require('cuid'),
+/**
+ * Application architecture
+ */
+(function() {
+    'use strict';
 
-  extend = underscore.extend,
-  events = new EventEmitter2({
-    // Support event wildcards for cross-cutting concerns.
-    wildcard: true,
+    var api = {};
+    var defaults = {
+        debug: false
+    };
+    var conf;
 
-    // Override by calling app.events.setMaxListeners(n).
-    maxlisteners: 1000 
-  }),
-  deferred = function deferred() {
-    return new $.Deferred();
-  },
-  resolved = deferred().resolve().promise(),
-  rejected = deferred().reject().promise(),
-  when = $.when,
+    if ( _ === undefined || Backbone === undefined || jQuery === undefined ) return;
 
-  renderReady = deferred(),
-  loadReady = deferred(),
+    var resolved = Deferred().resolve().promise();
+    var rejected = Deferred().reject().promise();
+    var when = $.when;
+    var appReady = Deferred();
 
-  setModule = function setModule(cursor, location, value) {
-    var tree = location.split('.'),
-      key = tree.shift();
+    // Prepare the mediator
+    _.extend(api, EventEmitter());
 
-    while (tree.length) {
-      if (cursor[key] !== undefined) {
-        cursor = cursor[key];
-      } else {
-        cursor = cursor[key] = {};
-      }
-      key = tree.shift();
+    // Emit event when appReady resolves - the app is starting.
+    appReady.done(function () {
+        api.trigger('appReady');
+    });
+
+    /**
+     * Simple event emitter service to use for the mediator.
+     * Copy of Backbone.Events but without methods causing tight coupling.
+     */
+    function EventEmitter() {
+        return _.pick(Backbone.Events, ['on', 'off', 'once', 'trigger']);
     }
 
-    if (cursor[key] === undefined) {
-      cursor[key] = value;
-      returnValue = true;
-    } else {
-      returnValue = false;
+    function Deferred() {
+        return new $.Deferred();
     }
-    return returnValue;
-  },  
 
-  trigger = function trigger() {
-    var args = [].slice.call(arguments);
-    events.emit.apply(events, arguments);
-  },
+    function setValueByNamespace( obj, namespace, value ) {
+        var tree = namespace.split('.');
+        var key = tree.shift();
 
-  on = function on() {
-    var args = [].slice.call(arguments),
-      type = args[0],
-      sourceId = args[1],
-      callback = args[2],
-      context = args[3] || null;
-
-    if (args.length <= 2) {
-      events.on.apply(events, arguments);
-    } else {
-      events.on.call(events, type, function (event) {
-        if (event.sourceId === sourceId) {
-          callback.call(context, event);
+        while ( tree.length ) {
+            if ( obj[key] !== undefined ) {
+                obj = obj[key];
+            } else {
+                obj = obj[key] = {};
+            }
+            key = tree.shift();
         }
-      });
-    }
-  },
 
-  off = function off() {
-    var args = [].slice.call(arguments),
-      eventType = args[0];
-    if (args.length > 1) {
-      events.off.apply(events, arguments);
-    } else {
-      events.removeAllListeners.call(events, eventType);
-    }    
-  },
-
-  app = {},
-  api,
-
-  init = function init(options) {
-    if (options.beforeRender) {
-      whenRenderReady = options.beforeRender;
+        if ( obj[key] === undefined ) {
+            obj[key] = value;
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    // Add keys to app object
-    extend(app, options);
+    function getValueByNameSpace( obj, namespace ) {
+        var tree = namespace.split('.');
+        var key = tree.shift();
 
-    // will pass global load and render blockers
-    // in here eventually.. for now, just resolve.
-    loadReady.resolve();
-  },
+        while ( tree.length ) {
+            if ( obj[key] === undefined ) return;
+            obj = obj[key];
+            key = tree.shift();
+        }
 
-  register = function register(ns, api) {
-    var newModule = setModule(this, ns, api);
+        return obj[namespace];
+    }
 
-    return (newModule) ? new Error('Module exists: ', ns): this;
-  };
+    /**
+     * Module registration
+     * Extend the app object as you wish
+     */
+    function register( namespace, moduleApi ) {
+        if ( !namespace ) return new Error('Namespace missing: ');
+        var newModule = setValueByNamespace(this, namespace, moduleApi);
 
-api = extend(app, {
-  init: init,
-  extend: extend,
-  renderReady: function (cb) {
-    renderReady.done.call(renderReady, cb);
-  },
-  loadReady: function (cb) {
-    loadReady.done.call(renderReady, cb);
-  },
+        return (newModule) ? new Error('Module exists already: ', namespace): this;
+    }
 
-  cuid: cuid,
-  '$': $,
-  get: $.get,
-  ajax: $.ajax,
-  deferred: deferred,
-  register: register,
-  events: events,
-  trigger: trigger,
-  on: on,
-  off: off,
-  resolved: resolved,
-  rejected: rejected,
-  when: when
-});
+    // return a deep copy of conf
+    // to avoid (accidental) mutations.
+    function getConfig( namespace ) {
+        var config = getValueByNameSpace(conf, namespace);
+        if ( !config ) return;
 
-// Emit render_ready event when renderReady resolves.
-renderReady.done(function () {
-  app.trigger('render_ready');
-});
+        return deepCopy(config);
+    }
 
-$(document).ready(function () {
-  // TODO: change this to pageReady when beforeRender
-  // support is added.
-  renderReady.resolve();
-});
+    // Deep copy of an object
+    function deepCopy( obj ) {
+        return JSON.parse(JSON.stringify(obj));
+    }
 
-if (typeof window !== 'undefined') {
-  window.tinyapp = api;
-}
+    function init( options ) {
+        // apply custom config if present
+        conf = _.extend({}, defaults, options);
 
-module.exports = api;
+        // Event debugging
+        if ( conf.debug === true ) {
+            this.on('all', function( event ) {
+                console.log(event);
+            });
+        }
+
+        // expose getConfig function as the config is now available
+        api.getConfig = getConfig;
+
+        // call all ready callbacks as soon as the DOM is ready
+        $(function() {
+            appReady.resolve();
+        });
+    }
+
+    // expose to global scope
+    window.app = _.extend(api, {
+        init: init,
+        register: register,
+        ready: function( cb ) {
+            appReady.done.call(appReady, cb);
+        },
+
+        // offer DOM manipulation service, for now its jQuery
+        '$': jQuery,
+        // offer a consistent AJAX-requests interface
+        ajax: jQuery.ajax,
+
+        // utility function to deep-copy objects
+        deepCopy: deepCopy,
+
+        // offer simple promise handling
+        Deferred: Deferred,
+        resolved: resolved,
+        rejected: rejected,
+        when: when,
+
+        // offer a consistent event emitting service
+        Events: EventEmitter
+    });
+}());
