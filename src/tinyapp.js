@@ -92,8 +92,9 @@
     }
 
     // Deep copy of an object
+    // alternatively use JSON.parse(JSON.stringify(obj), but it won't copy functions!
     function deepCopy( obj ) {
-        return JSON.parse(JSON.stringify(obj));
+        return $.extend(true, {}, obj);
     }
 
     function init( options ) {
