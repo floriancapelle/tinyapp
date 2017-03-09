@@ -113,6 +113,9 @@
 
         // call all ready callbacks as soon as the DOM is ready
         $(function() {
+            appReady.done(function() {
+                api.trigger('appReadyEnd');
+            });
             appReady.resolve();
         });
     }
